@@ -12,6 +12,8 @@ import (
 	"github.com/isaacphi/mcp-language-server/internal/protocol"
 )
 
+const diagnosticRequestTimeout = 5 * time.Second
+
 // GetDiagnosticsForFile retrieves diagnostics for a specific file from the language server
 func GetDiagnosticsForFile(ctx context.Context, client *lsp.Client, filePath string, contextLines int, showLineNumbers bool) (string, error) {
 	// Override with environment variable if specified
@@ -33,12 +35,17 @@ func GetDiagnosticsForFile(ctx context.Context, client *lsp.Client, filePath str
 	// Convert the file path to URI format
 	uri := protocol.DocumentUri("file://" + filePath)
 
-	// Request fresh diagnostics
+	// Request fresh diagnostics, but do not let a non-responsive pull-diagnostics
+	// implementation block results already received through publishDiagnostics.
+	diagCtx, cancelDiag := context.WithTimeout(ctx, diagnosticRequestTimeout)
+	defer cancelDiag()
+	activeDiagnosticNote := ""
 	diagParams := protocol.DocumentDiagnosticParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	}
-	_, err = client.Diagnostic(ctx, diagParams)
+	_, err = client.Diagnostic(diagCtx, diagParams)
 	if err != nil {
+		activeDiagnosticNote = fmt.Sprintf("Active diagnostic request failed or timed out after %s; showing cached publishDiagnostics results if available: %v", diagnosticRequestTimeout, err)
 		toolsLogger.Error("Failed to get diagnostics: %v", err)
 	}
 
@@ -46,6 +53,9 @@ func GetDiagnosticsForFile(ctx context.Context, client *lsp.Client, filePath str
 	diagnostics := client.GetFileDiagnostics(uri)
 
 	if len(diagnostics) == 0 {
+		if activeDiagnosticNote != "" {
+			return "No diagnostics found for " + filePath + "\n" + activeDiagnosticNote, nil
+		}
 		return "No diagnostics found for " + filePath, nil
 	}
 
@@ -125,6 +135,10 @@ func GetDiagnosticsForFile(ctx context.Context, client *lsp.Client, filePath str
 	result := fileInfo
 	if len(diagSummaries) > 0 {
 		result += strings.Join(diagSummaries, "\n") + "\n"
+	}
+
+	if activeDiagnosticNote != "" {
+		result += activeDiagnosticNote + "\n"
 	}
 
 	// Format the content with ranges

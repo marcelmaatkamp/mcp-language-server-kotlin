@@ -17,6 +17,8 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
+const lspInitializationTimeout = 20 * time.Second
+
 // Create a logger for the core component
 var coreLogger = logging.NewLogger(logging.Core)
 
@@ -34,7 +36,7 @@ type mcpServer struct {
 	cancelFunc       context.CancelFunc
 	workspaceWatcher *watcher.WorkspaceWatcher
 	lspReady         chan struct{} // closed when LSP is fully initialized
-	lspInitErr       error        // set if LSP initialization failed
+	lspInitErr       error         // set if LSP initialization failed
 }
 
 func parseConfig() (*config, error) {
@@ -105,7 +107,10 @@ func (s *mcpServer) initializeLSP() error {
 	s.lspClient = client
 	s.workspaceWatcher = watcher.NewWorkspaceWatcher(client)
 
-	initResult, err := client.InitializeLSPClient(s.ctx, s.config.workspaceDir)
+	initCtx, cancelInit := context.WithTimeout(s.ctx, lspInitializationTimeout)
+	defer cancelInit()
+
+	initResult, err := client.InitializeLSPClient(initCtx, s.config.workspaceDir)
 	if err != nil {
 		return fmt.Errorf("initialize failed: %v", err)
 	}
@@ -113,7 +118,7 @@ func (s *mcpServer) initializeLSP() error {
 	coreLogger.Debug("Server capabilities: %+v", initResult.Capabilities)
 
 	go s.workspaceWatcher.WatchWorkspace(s.ctx, s.config.workspaceDir)
-	return client.WaitForServerReady(s.ctx)
+	return client.WaitForServerReady(initCtx)
 }
 
 func (s *mcpServer) start() error {

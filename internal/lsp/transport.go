@@ -223,8 +223,18 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 
 	lspLogger.Debug("Waiting for response to request ID: %v", msg.ID)
 
-	// Wait for response
-	resp := <-ch
+	// Wait for response or cancellation.
+	var resp *Message
+	select {
+	case response, ok := <-ch:
+		if !ok || response == nil {
+			return fmt.Errorf("response handler closed without response for request ID %v", msg.ID)
+		}
+		resp = response
+	case <-ctx.Done():
+		lspLogger.Warn("Request canceled while waiting for response: method=%s id=%v: %v", method, msg.ID, ctx.Err())
+		return ctx.Err()
+	}
 
 	lspLogger.Debug("Received response for request ID: %v", msg.ID)
 
